@@ -1,0 +1,6 @@
+{
+  "name": "College Internship Management System",
+  "description": "Connect students with meaningful internship opportunities. A comprehensive college internship management platform for students, faculty, and administrators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
