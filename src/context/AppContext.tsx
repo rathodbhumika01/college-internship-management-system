@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import {
   User,
   Student,
@@ -16,10 +16,8 @@ import {
   InternshipStatus,
 } from '../types';
 import {
-  INITIAL_USERS,
   INITIAL_STUDENTS,
   INITIAL_FACULTY,
-  INITIAL_RECENT_ACTIVITIES,
 } from '../data/mockData';
 
 // ---------------------------------------------------------------------------
@@ -58,6 +56,20 @@ async function api(path: string, options?: RequestInit) {
 function toDbId(id: unknown): number | null {
   const text = String(id ?? '');
   return /^\d+$/.test(text) && Number(text) > 0 ? Number(text) : null;
+}
+
+// "2 hours ago" style text for the activity feed
+function timeAgo(value?: string): string {
+  const t = value ? Date.parse(value) : NaN;
+  if (isNaN(t)) return '';
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+  return new Date(t).toLocaleDateString();
 }
 
 function mapCompany(c: any): Company {
@@ -281,16 +293,15 @@ function loadStorage<T>(key: string, fallback: T): T {
 }
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [users, setUsers] = useState<User[]>(() => loadStorage(STORAGE_KEYS.USERS, INITIAL_USERS));
+  // No mock user any more: with nobody logged in the login page is shown
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const stored = loadStorage<User | null>(STORAGE_KEYS.USER, INITIAL_USERS[0]);
-    const startUser = stored || INITIAL_USERS[0];
-    authToken = (startUser as any).token || null;
-    return startUser;
+    const stored = loadStorage<User | null>(STORAGE_KEYS.USER, null);
+    authToken = stored ? ((stored as any).token || null) : null;
+    return stored;
   });
   const [students, setStudents] = useState<Student[]>([]);
   const [faculty, setFaculty] = useState<Faculty[]>([]);
-  // Everything except the demo activity log comes from the database, not from mock data / localStorage
+  // Everything comes from the database, not from mock data / localStorage
   const [companies, setCompanies] = useState<Company[]>([]);
   const [internships, setInternships] = useState<Internship[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -298,7 +309,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [studentFeedbacks, setStudentFeedbacks] = useState<StudentFeedback[]>([]);
   const [systemFeedbacks, setSystemFeedbacks] = useState<SystemFeedback[]>([]);
-  const [recentActivities, setRecentActivities] = useState<RecentActivity[]>(() => loadStorage(STORAGE_KEYS.ACTIVITIES, INITIAL_RECENT_ACTIVITIES));
 
   // Global Toast State
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' | 'error' } | null>(null);
@@ -313,7 +323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const hideToast = () => setToast(null);
 
   // -------------------------------------------------------------------------
-  // Load companies + internships from Flask
+  // Load data from Flask
   // -------------------------------------------------------------------------
   const refreshCatalog = async () => {
     try {
@@ -427,6 +437,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     // remove old mock copies saved by the previous versions
+    localStorage.removeItem(STORAGE_KEYS.USERS);
     localStorage.removeItem(STORAGE_KEYS.COMPANIES);
     localStorage.removeItem(STORAGE_KEYS.INTERNSHIPS);
     localStorage.removeItem(STORAGE_KEYS.APPLICATIONS);
@@ -436,12 +447,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem(STORAGE_KEYS.EVALUATIONS);
     localStorage.removeItem(STORAGE_KEYS.STUDENT_FEEDBACK);
     localStorage.removeItem(STORAGE_KEYS.SYSTEM_FEEDBACK);
-    refreshCatalog();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    localStorage.removeItem(STORAGE_KEYS.ACTIVITIES);
   }, []);
 
+  // Load everything after login (and again if the user or role changes)
   useEffect(() => {
     if (currentUser) {
+      refreshCatalog();
       refreshApplications();
       refreshInterviews();
       refreshPeople();
@@ -462,16 +474,110 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(nextVal ? 'Saved internship to your bookmarks' : 'Removed internship from bookmarks', 'info');
   };
 
-  // Sync to localStorage (only the login and the demo activity log are kept locally now)
+  // Only the login is kept in the browser now
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUser));
   }, [currentUser]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  }, [users]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ACTIVITIES, JSON.stringify(recentActivities));
-  }, [recentActivities]);
+
+  // Everyone who is registered in the database (students + faculty), newest first
+  const users: User[] = useMemo(() => {
+    const fromStudents: User[] = students.map(s => ({
+      id: s.user_id,
+      email: s.email,
+      role: 'student',
+      name: s.name,
+      phone: s.phone,
+      status: s.status,
+      created_at: (s as any).created_at || '',
+    }));
+    const fromFaculty: User[] = faculty.map(f => ({
+      id: f.user_id,
+      email: f.email,
+      role: 'faculty',
+      name: f.name,
+      phone: f.phone,
+      status: f.status,
+      created_at: (f as any).created_at || '',
+    }));
+    return [...fromStudents, ...fromFaculty].sort(
+      (a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0)
+    );
+  }, [students, faculty]);
+
+  // The activity feed is built from real rows, so it always matches the database
+  const recentActivities: RecentActivity[] = useMemo(() => {
+    const items: { at: number; act: RecentActivity }[] = [];
+
+    applications.forEach(a => {
+      const at = Date.parse(a.applied_date);
+      if (!isNaN(at)) {
+        items.push({
+          at,
+          act: {
+            id: `app-${a.id}`,
+            title: `New application submitted by ${a.student_name} for ${a.internship_title}`,
+            type: 'application',
+            timestamp: timeAgo(a.applied_date),
+            actor: a.student_name,
+          },
+        });
+      }
+    });
+
+    interviews.forEach(i => {
+      const at = Date.parse(i.created_at);
+      if (!isNaN(at)) {
+        items.push({
+          at,
+          act: {
+            id: `intv-${i.id}`,
+            title: `Interview scheduled for ${i.student_name} with ${i.company_name}`,
+            type: 'interview',
+            timestamp: timeAgo(i.created_at),
+            actor: 'Faculty',
+          },
+        });
+      }
+    });
+
+    internships.forEach(i => {
+      const at = Date.parse(i.created_at);
+      if (!isNaN(at)) {
+        items.push({
+          at,
+          act: {
+            id: `int-${i.id}`,
+            title: `New internship posted: ${i.title} (${i.company_name})`,
+            type: 'internship',
+            timestamp: timeAgo(i.created_at),
+            actor: i.posted_by_name || 'Faculty',
+          },
+        });
+      }
+    });
+
+    students.forEach(s => {
+      const created = (s as any).created_at as string | undefined;
+      const at = created ? Date.parse(created) : NaN;
+      if (!isNaN(at)) {
+        items.push({
+          at,
+          act: {
+            id: `std-${s.id}`,
+            title: `Student registered: ${s.name} (${s.department})`,
+            type: 'student',
+            timestamp: timeAgo(created),
+            actor: 'System',
+          },
+        });
+      }
+    });
+
+    return items
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 10)
+      .map(x => x.act);
+  }, [applications, interviews, internships, students]);
 
   // Derived current role profile.
   // Real (database) users carry their department / gpa / designation from the login response.
@@ -513,19 +619,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : INITIAL_FACULTY.find(f => f.email === currentUser.email) || INITIAL_FACULTY[0]
       : null;
 
-  // Add activity log
-  const logActivity = (title: string, type: RecentActivity['type'], actor: string) => {
-    const newAct: RecentActivity = {
-      id: `act-${Date.now()}`,
-      title,
-      type,
-      timestamp: 'Just now',
-      actor,
-    };
-    setRecentActivities(prev => [newAct, ...prev.slice(0, 19)]);
-  };
+  // The activity feed is built from the database now, so there is nothing to log here.
+  // The function stays so that the calls below keep working.
+  const logActivity = (_title: string, _type: RecentActivity['type'], _actor: string) => {};
 
-  // Auth functions
+  // Auth functions (demo-account login; real login goes through authService)
   const login = (email: string, role: UserRole): boolean => {
     const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.role === role);
     if (existing) {
@@ -623,34 +721,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Phone number must be between 10 and 15 digits.' };
     }
 
-    const newId = `std-${Date.now()}`;
-    const newUserId = `user-${newId}`;
-
-    const newStudent: Student = {
-      id: newId,
-      user_id: newUserId,
-      name: payload.full_name.trim(),
-      email: normalizedEmail,
-      phone: cleanPhone,
-      department: payload.department.trim(),
-      gpa: payload.gpa,
-      resume_filename: `${payload.full_name.trim().replace(/\s+/g, '_')}_Resume.pdf`,
-      resume_size_mb: 1.2,
-      status: 'active',
-      placed: false,
-    };
-
-    const newUser: User = {
-      id: newUserId,
-      email: normalizedEmail,
-      name: payload.full_name.trim(),
-      role: 'student',
-      phone: cleanPhone,
-      status: 'active',
-      created_at: new Date().toISOString(),
-    };
-
-    setUsers(prev => [newUser, ...prev]);
+    // The account itself is created by the backend (authService); nothing is stored locally.
     logActivity(`New student registered: ${payload.full_name} (${payload.department})`, 'student', payload.full_name);
     return { success: true };
   };
@@ -672,31 +743,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Phone number must be between 10 and 15 digits.' };
     }
 
-    const newId = `fac-${Date.now()}`;
-    const newUserId = `user-${newId}`;
-
-    const newFaculty: Faculty = {
-      id: newId,
-      user_id: newUserId,
-      name: payload.full_name.trim(),
-      email: normalizedEmail,
-      phone: cleanPhone,
-      department: payload.department.trim(),
-      designation: payload.designation.trim(),
-      status: 'active',
-    };
-
-    const newUser: User = {
-      id: newUserId,
-      email: normalizedEmail,
-      name: payload.full_name.trim(),
-      role: 'faculty',
-      phone: cleanPhone,
-      status: 'active',
-      created_at: new Date().toISOString(),
-    };
-
-    setUsers(prev => [newUser, ...prev]);
+    // The account itself is created by the backend (authService); nothing is stored locally.
     logActivity(`New faculty registered: ${payload.full_name}`, 'student', payload.full_name);
     return { success: true };
   };
@@ -1243,19 +1290,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  // Clears the browser's saved data and logs out. Database data is not touched.
   const resetAllData = () => {
     localStorage.clear();
-    setUsers(INITIAL_USERS);
-    setCurrentUser(INITIAL_USERS[0]);
+    authToken = null;
+    setCurrentUser(null);
     setStudents([]);
     setFaculty([]);
+    setCompanies([]);
+    setInternships([]);
     setApplications([]);
     setInterviews([]);
     setEvaluations([]);
     setStudentFeedbacks([]);
     setSystemFeedbacks([]);
-    setRecentActivities(INITIAL_RECENT_ACTIVITIES);
-    refreshCatalog();
   };
 
   return (
