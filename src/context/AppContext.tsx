@@ -19,15 +19,149 @@ import {
   INITIAL_USERS,
   INITIAL_STUDENTS,
   INITIAL_FACULTY,
-  INITIAL_COMPANIES,
-  INITIAL_INTERNSHIPS,
-  INITIAL_APPLICATIONS,
-  INITIAL_INTERVIEWS,
-  INITIAL_EVALUATIONS,
-  INITIAL_STUDENT_FEEDBACK,
-  INITIAL_SYSTEM_FEEDBACK,
   INITIAL_RECENT_ACTIVITIES,
 } from '../data/mockData';
+
+// ---------------------------------------------------------------------------
+// Backend connection
+// ---------------------------------------------------------------------------
+const API_BASE = 'http://localhost:5000/api';
+
+// The login token. Every request sends it, and the backend checks who we are from it.
+let authToken: string | null = null;
+
+async function api(path: string, options?: RequestInit) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    ...options,
+  });
+  if (res.status === 401) {
+    // token missing, expired or not valid any more: go back to the login page
+    window.dispatchEvent(new Event('cims-unauthorized'));
+  }
+  let body: any = {};
+  try {
+    body = await res.json();
+  } catch {
+    /* ignore */
+  }
+  if (!res.ok || body.success === false) {
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return body;
+}
+
+// Ids that come from PostgreSQL are plain numbers. Mock ids look like 'std-1'.
+function toDbId(id: unknown): number | null {
+  const text = String(id ?? '');
+  return /^\d+$/.test(text) && Number(text) > 0 ? Number(text) : null;
+}
+
+function mapCompany(c: any): Company {
+  return {
+    ...c,
+    id: String(c.id),
+    created_at: c.created_at || new Date().toISOString(),
+  } as Company;
+}
+
+function mapInternship(i: any, bookmarkedIds: Set<string>): Internship {
+  const id = String(i.id);
+  return {
+    ...i,
+    id,
+    company_id: String(i.company_id),
+    posted_by_faculty_id: String(i.posted_by ?? ''),
+    posted_by_name: i.posted_by_name || '',
+    bookmarked: bookmarkedIds.has(id),
+  } as unknown as Internship;
+}
+
+function mapApplication(a: any): Application {
+  return {
+    ...a,
+    id: String(a.id),
+    student_id: String(a.student_id),
+    internship_id: String(a.internship_id),
+    student_gpa: Number(a.student_gpa) || 0,
+    resume_filename: a.resume_filename || '',
+    cover_letter: a.cover_letter || '',
+    qualifications: a.qualifications || '',
+    faculty_feedback: a.faculty_feedback || undefined,
+    timeline: a.timeline || [],
+  } as Application;
+}
+
+function mapStudent(r: any): Student {
+  const name = String(r.name || '');
+  return {
+    ...r,
+    id: String(r.id),
+    user_id: String(r.user_id),
+    phone: r.phone || '',
+    resume_filename: `${name.trim().replace(/\s+/g, '_')}_Resume.pdf`,
+    resume_size_mb: 1.2,
+    placed: !!r.placed,
+  } as Student;
+}
+
+function mapFaculty(r: any): Faculty {
+  return {
+    ...r,
+    id: String(r.id),
+    user_id: String(r.user_id),
+    phone: r.phone || '',
+  } as Faculty;
+}
+
+function mapEvaluation(r: any): Evaluation {
+  return {
+    ...r,
+    id: String(r.id),
+    student_id: String(r.student_id),
+    internship_id: String(r.internship_id),
+    faculty_id: String(r.faculty_id ?? ''),
+    created_at: r.created_at || new Date().toISOString(),
+  } as Evaluation;
+}
+
+function mapStudentFeedback(r: any): StudentFeedback {
+  return {
+    ...r,
+    id: String(r.id),
+    student_id: String(r.student_id),
+    internship_id: String(r.internship_id),
+    company_id: String(r.company_id),
+    submitted_at: r.submitted_at || new Date().toISOString(),
+  } as StudentFeedback;
+}
+
+function mapSystemFeedback(r: any): SystemFeedback {
+  return {
+    ...r,
+    id: String(r.id),
+    user_id: String(r.user_id ?? 'anonymous'),
+    submitted_at: r.submitted_at || new Date().toISOString(),
+  } as SystemFeedback;
+}
+
+function mapInterview(r: any): Interview {
+  return {
+    ...r,
+    id: String(r.id),
+    application_id: String(r.application_id),
+    student_id: String(r.student_id),
+    internship_id: String(r.internship_id),
+    faculty_id: String(r.faculty_id ?? ''),
+    interviewer: r.interviewer || '',
+    comments: r.comments || undefined,
+    feedback: r.feedback || undefined,
+    created_at: r.created_at || new Date().toISOString(),
+  } as Interview;
+}
 
 interface AppContextType {
   currentUser: User | null;
@@ -47,6 +181,7 @@ interface AppContextType {
 
   // Auth
   login: (email: string, role: UserRole) => boolean;
+  loginWithUser: (user: User) => void;
   logout: () => void;
   switchRole: (role: UserRole) => void;
   registerStudentAccount: (payload: {
@@ -82,7 +217,7 @@ interface AppContextType {
   submitStudentFeedback: (
     internshipId: string,
     feedback: Omit<StudentFeedback, 'id' | 'student_id' | 'student_name' | 'company_name' | 'submitted_at' | 'average_rating' | 'internship_id'>
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
 
   // Faculty Actions
   createInternship: (data: Omit<Internship, 'id' | 'created_at' | 'posted_by_faculty_id' | 'posted_by_name'>) => { success: boolean; error?: string };
@@ -101,7 +236,7 @@ interface AppContextType {
   rescheduleInterview: (id: string, newDate: string, newTime: string) => { success: boolean; error?: string };
   cancelInterview: (id: string) => void;
   updateInterviewResult: (id: string, result: 'selected' | 'rejected' | 'on_hold', feedback?: string) => void;
-  submitEvaluation: (data: Omit<Evaluation, 'id' | 'created_at' | 'faculty_id' | 'faculty_name' | 'average_score'>) => { success: boolean; error?: string };
+  submitEvaluation: (data: Omit<Evaluation, 'id' | 'created_at' | 'faculty_id' | 'faculty_name' | 'average_score'>) => Promise<{ success: boolean; error?: string }>;
 
   // Admin Actions
   addStudent: (data: Omit<Student, 'id' | 'user_id' | 'status'>) => { success: boolean; error?: string };
@@ -133,6 +268,7 @@ const STORAGE_KEYS = {
   STUDENT_FEEDBACK: 'cims_v3_student_feedback',
   SYSTEM_FEEDBACK: 'cims_v3_system_feedback',
   ACTIVITIES: 'cims_v3_activities',
+  BOOKMARKS: 'cims_v3_bookmarks',
 };
 
 function loadStorage<T>(key: string, fallback: T): T {
@@ -148,17 +284,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [users, setUsers] = useState<User[]>(() => loadStorage(STORAGE_KEYS.USERS, INITIAL_USERS));
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const stored = loadStorage<User | null>(STORAGE_KEYS.USER, INITIAL_USERS[0]);
-    return stored || INITIAL_USERS[0];
+    const startUser = stored || INITIAL_USERS[0];
+    authToken = (startUser as any).token || null;
+    return startUser;
   });
-  const [students, setStudents] = useState<Student[]>(() => loadStorage(STORAGE_KEYS.STUDENTS, INITIAL_STUDENTS));
-  const [faculty, setFaculty] = useState<Faculty[]>(() => loadStorage(STORAGE_KEYS.FACULTY, INITIAL_FACULTY));
-  const [companies, setCompanies] = useState<Company[]>(() => loadStorage(STORAGE_KEYS.COMPANIES, INITIAL_COMPANIES));
-  const [internships, setInternships] = useState<Internship[]>(() => loadStorage(STORAGE_KEYS.INTERNSHIPS, INITIAL_INTERNSHIPS));
-  const [applications, setApplications] = useState<Application[]>(() => loadStorage(STORAGE_KEYS.APPLICATIONS, INITIAL_APPLICATIONS));
-  const [interviews, setInterviews] = useState<Interview[]>(() => loadStorage(STORAGE_KEYS.INTERVIEWS, INITIAL_INTERVIEWS));
-  const [evaluations, setEvaluations] = useState<Evaluation[]>(() => loadStorage(STORAGE_KEYS.EVALUATIONS, INITIAL_EVALUATIONS));
-  const [studentFeedbacks, setStudentFeedbacks] = useState<StudentFeedback[]>(() => loadStorage(STORAGE_KEYS.STUDENT_FEEDBACK, INITIAL_STUDENT_FEEDBACK));
-  const [systemFeedbacks, setSystemFeedbacks] = useState<SystemFeedback[]>(() => loadStorage(STORAGE_KEYS.SYSTEM_FEEDBACK, INITIAL_SYSTEM_FEEDBACK));
+  const [students, setStudents] = useState<Student[]>([]);
+  const [faculty, setFaculty] = useState<Faculty[]>([]);
+  // Everything except the demo activity log comes from the database, not from mock data / localStorage
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [internships, setInternships] = useState<Internship[]>([]);
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [interviews, setInterviews] = useState<Interview[]>([]);
+  const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
+  const [studentFeedbacks, setStudentFeedbacks] = useState<StudentFeedback[]>([]);
+  const [systemFeedbacks, setSystemFeedbacks] = useState<SystemFeedback[]>([]);
   const [recentActivities, setRecentActivities] = useState<RecentActivity[]>(() => loadStorage(STORAGE_KEYS.ACTIVITIES, INITIAL_RECENT_ACTIVITIES));
 
   // Global Toast State
@@ -173,23 +312,157 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const hideToast = () => setToast(null);
 
-  const toggleBookmarkInternship = (id: string) => {
-    setInternships(prev =>
-      prev.map(item => {
-        if (item.id === id) {
-          const nextVal = !item.bookmarked;
-          showToast(
-            nextVal ? 'Saved internship to your bookmarks' : 'Removed internship from bookmarks',
-            'info'
-          );
-          return { ...item, bookmarked: nextVal };
-        }
-        return item;
-      })
-    );
+  // -------------------------------------------------------------------------
+  // Load companies + internships from Flask
+  // -------------------------------------------------------------------------
+  const refreshCatalog = async () => {
+    try {
+      const bookmarkedIds = new Set<string>(loadStorage<string[]>(STORAGE_KEYS.BOOKMARKS, []));
+      const [compRes, intRes] = await Promise.all([
+        api('/companies'),
+        api('/internships?status=all'),
+      ]);
+      setCompanies((compRes.companies || []).map(mapCompany));
+      setInternships((intRes.internships || []).map((i: any) => mapInternship(i, bookmarkedIds)));
+    } catch (e: any) {
+      console.error('refreshCatalog failed:', e);
+      showToast('Could not load data from server. Is Flask running on port 5000?', 'error');
+    }
   };
 
-  // Sync to localStorage
+  // Students only get their own applications, faculty and admin get all of them
+  const refreshApplications = async () => {
+    if (!currentUser) return;
+    try {
+      let path = '/applications';
+      if (currentUser.role === 'student') {
+        const myId = toDbId(currentUser.id);
+        if (!myId) {
+          setApplications([]);
+          return;
+        }
+        path += `?student_id=${myId}`;
+      }
+      const res = await api(path);
+      setApplications((res.applications || []).map(mapApplication));
+    } catch (e: any) {
+      console.error('refreshApplications failed:', e);
+      showToast('Could not load applications from server.', 'error');
+    }
+  };
+
+  // Students only get their own interviews, faculty and admin get all of them
+  const refreshInterviews = async () => {
+    if (!currentUser) return;
+    try {
+      let path = '/interviews';
+      if (currentUser.role === 'student') {
+        const myId = toDbId(currentUser.id);
+        if (!myId) {
+          setInterviews([]);
+          return;
+        }
+        path += `?student_id=${myId}`;
+      }
+      const res = await api(path);
+      setInterviews((res.interviews || []).map(mapInterview));
+    } catch (e: any) {
+      console.error('refreshInterviews failed:', e);
+      showToast('Could not load interviews from server.', 'error');
+    }
+  };
+
+  // Evaluations, student feedback (everyone) and system feedback (admin only)
+  const refreshFeedback = async () => {
+    if (!currentUser) return;
+    try {
+      let query = '';
+      if (currentUser.role === 'student') {
+        const myId = toDbId(currentUser.id);
+        if (!myId) {
+          setEvaluations([]);
+          setStudentFeedbacks([]);
+          return;
+        }
+        query = `?student_id=${myId}`;
+      }
+      const [eRes, sRes] = await Promise.all([api(`/evaluations${query}`), api(`/student-feedback${query}`)]);
+      setEvaluations((eRes.evaluations || []).map(mapEvaluation));
+      setStudentFeedbacks((sRes.feedback || []).map(mapStudentFeedback));
+      if (currentUser.role === 'admin') {
+        const yRes = await api('/system-feedback');
+        setSystemFeedbacks((yRes.feedback || []).map(mapSystemFeedback));
+      }
+    } catch (e: any) {
+      console.error('refreshFeedback failed:', e);
+      showToast('Could not load feedback from server.', 'error');
+    }
+  };
+
+  // Only admin and faculty need the full students / faculty lists
+  const refreshPeople = async () => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'faculty')) return;
+    try {
+      const [sRes, fRes] = await Promise.all([api('/students'), api('/faculty')]);
+      setStudents((sRes.students || []).map(mapStudent));
+      setFaculty((fRes.faculty || []).map(mapFaculty));
+    } catch (e: any) {
+      console.error('refreshPeople failed:', e);
+      showToast('Could not load students and faculty from server.', 'error');
+    }
+  };
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      authToken = null;
+      setCurrentUser(prev => {
+        if (prev) showToast('Your session has ended. Please log in again.', 'warning');
+        return null;
+      });
+    };
+    window.addEventListener('cims-unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('cims-unauthorized', handleUnauthorized);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // remove old mock copies saved by the previous versions
+    localStorage.removeItem(STORAGE_KEYS.COMPANIES);
+    localStorage.removeItem(STORAGE_KEYS.INTERNSHIPS);
+    localStorage.removeItem(STORAGE_KEYS.APPLICATIONS);
+    localStorage.removeItem(STORAGE_KEYS.INTERVIEWS);
+    localStorage.removeItem(STORAGE_KEYS.STUDENTS);
+    localStorage.removeItem(STORAGE_KEYS.FACULTY);
+    localStorage.removeItem(STORAGE_KEYS.EVALUATIONS);
+    localStorage.removeItem(STORAGE_KEYS.STUDENT_FEEDBACK);
+    localStorage.removeItem(STORAGE_KEYS.SYSTEM_FEEDBACK);
+    refreshCatalog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (currentUser) {
+      refreshApplications();
+      refreshInterviews();
+      refreshPeople();
+      refreshFeedback();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id, currentUser?.role]);
+
+  const toggleBookmarkInternship = (id: string) => {
+    const target = internships.find(i => i.id === id);
+    if (!target) return;
+    const nextVal = !(target as any).bookmarked;
+    const ids = new Set<string>(loadStorage<string[]>(STORAGE_KEYS.BOOKMARKS, []));
+    if (nextVal) ids.add(id);
+    else ids.delete(id);
+    localStorage.setItem(STORAGE_KEYS.BOOKMARKS, JSON.stringify(Array.from(ids)));
+    setInternships(prev => prev.map(item => (item.id === id ? { ...item, bookmarked: nextVal } : item)));
+    showToast(nextVal ? 'Saved internship to your bookmarks' : 'Removed internship from bookmarks', 'info');
+  };
+
+  // Sync to localStorage (only the login and the demo activity log are kept locally now)
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUser));
   }, [currentUser]);
@@ -197,44 +470,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   }, [users]);
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
-  }, [students]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.FACULTY, JSON.stringify(faculty));
-  }, [faculty]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(companies));
-  }, [companies]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.INTERNSHIPS, JSON.stringify(internships));
-  }, [internships]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.APPLICATIONS, JSON.stringify(applications));
-  }, [applications]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.INTERVIEWS, JSON.stringify(interviews));
-  }, [interviews]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EVALUATIONS, JSON.stringify(evaluations));
-  }, [evaluations]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STUDENT_FEEDBACK, JSON.stringify(studentFeedbacks));
-  }, [studentFeedbacks]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SYSTEM_FEEDBACK, JSON.stringify(systemFeedbacks));
-  }, [systemFeedbacks]);
-  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ACTIVITIES, JSON.stringify(recentActivities));
   }, [recentActivities]);
 
-  // Derived current role profile
-  const currentStudent = currentUser?.role === 'student'
-    ? students.find(s => s.email === currentUser.email) || students[0]
-    : null;
+  // Derived current role profile.
+  // Real (database) users carry their department / gpa / designation from the login response.
+  const dbUserId = currentUser ? toDbId(currentUser.id) : null;
+  const loginExtras: any = currentUser || {};
 
-  const currentFaculty = currentUser?.role === 'faculty'
-    ? faculty.find(f => f.email === currentUser.email) || faculty[0]
-    : null;
+  const currentStudent: Student | null =
+    currentUser?.role === 'student'
+      ? dbUserId
+        ? {
+            id: String(dbUserId),
+            user_id: String(dbUserId),
+            name: currentUser.name,
+            email: currentUser.email,
+            phone: currentUser.phone || '',
+            department: loginExtras.department || '',
+            gpa: Number(loginExtras.gpa) || 0,
+            resume_filename: `${currentUser.name.trim().replace(/\s+/g, '_')}_Resume.pdf`,
+            resume_size_mb: 1.2,
+            status: 'active',
+            placed: false,
+          }
+        : INITIAL_STUDENTS.find(s => s.email === currentUser.email) || INITIAL_STUDENTS[0]
+      : null;
+
+  const currentFaculty: Faculty | null =
+    currentUser?.role === 'faculty'
+      ? dbUserId
+        ? {
+            id: String(dbUserId),
+            user_id: String(dbUserId),
+            name: currentUser.name,
+            email: currentUser.email,
+            phone: currentUser.phone || '',
+            department: loginExtras.department || '',
+            designation: loginExtras.designation || '',
+            status: 'active',
+          }
+        : INITIAL_FACULTY.find(f => f.email === currentUser.email) || INITIAL_FACULTY[0]
+      : null;
 
   // Add activity log
   const logActivity = (title: string, type: RecentActivity['type'], actor: string) => {
@@ -261,14 +538,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Role-based matching from mock records
     if (role === 'student') {
-      const std = students.find(s => s.email.toLowerCase() === email.toLowerCase());
+      const std = INITIAL_STUDENTS.find(s => s.email.toLowerCase() === email.toLowerCase());
       if (std) {
         const u: User = { id: std.user_id, email: std.email, role: 'student', name: std.name, status: 'active', created_at: new Date().toISOString() };
         setCurrentUser(u);
         return true;
       }
     } else if (role === 'faculty') {
-      const fac = faculty.find(f => f.email.toLowerCase() === email.toLowerCase());
+      const fac = INITIAL_FACULTY.find(f => f.email.toLowerCase() === email.toLowerCase());
       if (fac) {
         const u: User = { id: fac.user_id, email: fac.email, role: 'faculty', name: fac.name, status: 'active', created_at: new Date().toISOString() };
         setCurrentUser(u);
@@ -283,14 +560,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return false;
   };
-
+  const loginWithUser = (user: User) => {
+    authToken = (user as any).token || null;
+    setCurrentUser({ ...user, status: 'active', created_at: new Date().toISOString() });
+  };
   const logout = () => {
+    authToken = null;
     setCurrentUser(null);
   };
 
   const switchRole = (role: UserRole) => {
     if (role === 'student') {
-      const std = students[0];
+      const std = INITIAL_STUDENTS[0];
       setCurrentUser({
         id: std.user_id,
         email: std.email,
@@ -300,7 +581,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_at: '2026-07-15T09:00:00Z',
       });
     } else if (role === 'faculty') {
-      const fac = faculty[0];
+      const fac = INITIAL_FACULTY[0];
       setCurrentUser({
         id: fac.user_id,
         email: fac.email,
@@ -369,7 +650,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
 
-    setStudents(prev => [newStudent, ...prev]);
     setUsers(prev => [newUser, ...prev]);
     logActivity(`New student registered: ${payload.full_name} (${payload.department})`, 'student', payload.full_name);
     return { success: true };
@@ -416,7 +696,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
 
-    setFaculty(prev => [newFaculty, ...prev]);
     setUsers(prev => [newUser, ...prev]);
     logActivity(`New faculty registered: ${payload.full_name}`, 'student', payload.full_name);
     return { success: true };
@@ -456,6 +735,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'You must be logged in as a student to apply.' };
     }
 
+    // Must be a real database account (numeric user id), not a mock one
+    const studentDbId = toDbId(currentStudent.user_id);
+    if (!studentDbId) {
+      return { success: false, error: 'Please log in with a registered student account to apply.' };
+    }
+
     // Validation: PDF only
     if (!resumeFile.name.toLowerCase().endsWith('.pdf')) {
       return { success: false, error: 'Resume must be a PDF file only.' };
@@ -479,30 +764,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Internship not found.' };
     }
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Send to backend; the list refreshes when it finishes
+    api('/applications', {
+      method: 'POST',
+      body: JSON.stringify({
+        student_id: studentDbId,
+        internship_id: Number(internshipId),
+        resume_filename: resumeFile.name,
+        cover_letter: coverLetter,
+        qualifications,
+      }),
+    })
+      .then(() => {
+        logActivity(`Application submitted by ${currentStudent.name} for ${internship.title}`, 'application', currentStudent.name);
+        showToast('Application submitted successfully.', 'success');
+        return refreshApplications();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
 
-    const newApp: Application = {
-      id: `app-${Date.now()}`,
-      student_id: currentStudent.id,
-      student_name: currentStudent.name,
-      student_email: currentStudent.email,
-      student_department: currentStudent.department,
-      student_gpa: currentStudent.gpa,
-      internship_id: internship.id,
-      internship_title: internship.title,
-      company_name: internship.company_name,
-      resume_filename: resumeFile.name,
-      cover_letter: coverLetter,
-      qualifications,
-      applied_date: todayStr,
-      status: 'pending',
-      timeline: [
-        { status: 'submitted', date: todayStr, note: 'Application submitted successfully.' },
-      ],
-    };
-
-    setApplications(prev => [newApp, ...prev]);
-    logActivity(`Application submitted by ${currentStudent.name} for ${internship.title}`, 'application', currentStudent.name);
     return { success: true };
   };
 
@@ -510,64 +789,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const app = applications.find(a => a.id === applicationId);
     if (!app) return { success: false, error: 'Application not found' };
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    setApplications(prev =>
-      prev.map(a =>
-        a.id === applicationId
-          ? {
-              ...a,
-              status: 'withdrawn',
-              timeline: [
-                ...a.timeline,
-                { status: 'withdrawn', date: todayStr, note: 'Application withdrawn by student.' },
-              ],
-            }
-          : a
-      )
-    );
-    logActivity(`Application withdrawn for ${app.internship_title}`, 'application', app.student_name);
+    api(`/applications/${applicationId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'withdrawn' }),
+    })
+      .then(() => {
+        logActivity(`Application withdrawn for ${app.internship_title}`, 'application', app.student_name);
+        showToast('Application withdrawn.', 'info');
+        return refreshApplications();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
+
     return { success: true };
   };
 
-  const submitStudentFeedback = (
+  const submitStudentFeedback = async (
     internshipId: string,
     feedback: Omit<StudentFeedback, 'id' | 'student_id' | 'student_name' | 'company_name' | 'submitted_at' | 'average_rating' | 'internship_id'>
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     if (!currentStudent) return { success: false, error: 'Student login required' };
+
+    const studentDbId = toDbId(currentStudent.user_id);
+    const internshipDbId = toDbId(internshipId);
+    if (!studentDbId || !internshipDbId) {
+      return { success: false, error: 'Please log in with a registered student account to give feedback.' };
+    }
 
     const internship = internships.find(i => i.id === internshipId);
     if (!internship) return { success: false, error: 'Internship not found' };
 
-    const avg =
-      (feedback.company_culture +
-        feedback.mentorship_quality +
-        feedback.technical_learning +
-        feedback.work_environment +
-        feedback.overall_experience) /
-      5.0;
-
-    const newFb: StudentFeedback = {
-      id: `sfb-${Date.now()}`,
-      student_id: currentStudent.id,
-      student_name: currentStudent.name,
-      internship_id: internship.id,
-      company_name: internship.company_name,
-      ...feedback,
-      company_id: feedback.company_id || internship.company_id,
-      average_rating: parseFloat(avg.toFixed(1)),
-      submitted_at: new Date().toISOString(),
-    };
-
-    setStudentFeedbacks(prev => [newFb, ...prev]);
-    logActivity(`Feedback submitted for ${internship.company_name} by ${currentStudent.name}`, 'evaluation', currentStudent.name);
-    return { success: true };
+    try {
+      await api('/student-feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          student_id: studentDbId,
+          internship_id: internshipDbId,
+          company_culture: feedback.company_culture,
+          mentorship_quality: feedback.mentorship_quality,
+          technical_learning: feedback.technical_learning,
+          work_environment: feedback.work_environment,
+          overall_experience: feedback.overall_experience,
+          comments: feedback.comments,
+        }),
+      });
+      logActivity(`Feedback submitted for ${internship.company_name} by ${currentStudent.name}`, 'evaluation', currentStudent.name);
+      refreshFeedback();
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
   };
 
   // Faculty Actions
   const createInternship = (
     data: Omit<Internship, 'id' | 'created_at' | 'posted_by_faculty_id' | 'posted_by_name'>
   ): { success: boolean; error?: string } => {
-    if (!currentFaculty) return { success: false, error: 'Faculty login required' };
+    if (!currentUser || currentUser.role !== 'faculty') {
+      return { success: false, error: 'Faculty login required' };
+    }
+
+    // Must be a real database account (numeric user id), not a mock one
+    const postedBy = Number(currentUser.id);
+    if (!Number.isInteger(postedBy) || postedBy <= 0) {
+      return { success: false, error: 'Please log in with a real faculty account to post internships.' };
+    }
 
     // Validation: Start Date < End Date
     if (new Date(data.start_date) >= new Date(data.end_date)) {
@@ -579,16 +864,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Internship duration must be between 4 weeks (min) and 6 months (max).' };
     }
 
-    const newInt: Internship = {
-      ...data,
-      id: `int-${Date.now()}`,
-      posted_by_faculty_id: currentFaculty.id,
-      posted_by_name: currentFaculty.name,
-      created_at: new Date().toISOString(),
-    };
+    const companyId = Number((data as any).company_id);
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+      return { success: false, error: 'Please choose a company from the database list.' };
+    }
 
-    setInternships(prev => [newInt, ...prev]);
-    logActivity(`New internship posted: ${data.title} (${data.company_name})`, 'internship', currentFaculty.name);
+    const payload = { ...data, company_id: companyId, posted_by: postedBy };
+
+    // Send to backend; the list refreshes when it finishes
+    api('/internships', { method: 'POST', body: JSON.stringify(payload) })
+      .then(() => {
+        logActivity(`New internship posted: ${data.title} (${data.company_name})`, 'internship', currentUser.name);
+        showToast('Internship submitted for admin approval.', 'success');
+        return refreshCatalog();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
+
     return { success: true };
   };
 
@@ -600,12 +891,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Duration must be between 4 weeks and 6 months.' };
     }
 
+    // No edit endpoint on the backend yet: this change lasts only until refresh
     setInternships(prev => prev.map(i => (i.id === id ? { ...i, ...updates } : i)));
     return { success: true };
   };
 
   const archiveInternship = (id: string) => {
     setInternships(prev => prev.map(i => (i.id === id ? { ...i, status: 'archived' } : i)));
+    api(`/internships/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'archived' }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshCatalog();
+      });
   };
 
   const updateApplicationStatus = (id: string, status: ApplicationStatus, feedback?: string) => {
@@ -638,6 +935,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
+    // Save to the database (only for real applications, which have numeric ids)
+    if (toDbId(id)) {
+      api(`/applications/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, feedback }) })
+        .catch((e: Error) => {
+          showToast(e.message, 'error');
+          refreshApplications();
+        });
+    }
+
     const targetApp = applications.find(a => a.id === id);
     if (targetApp) {
       logActivity(
@@ -660,7 +966,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const internship = internships.find(i => i.id === data.internshipId);
     if (!internship) return { success: false, error: 'Internship not found' };
 
-    const student = students.find(s => s.id === data.studentId);
+    // Real students come from the applications list, mock ones from the students list
+    const appRecord = applications.find(a => a.id === data.applicationId);
+    const student =
+      students.find(s => s.id === data.studentId) ||
+      (appRecord
+        ? ({ id: appRecord.student_id, name: appRecord.student_name, email: appRecord.student_email } as Student)
+        : undefined);
     if (!student) return { success: false, error: 'Student not found' };
 
     // Validation: cannot schedule after application deadline
@@ -682,30 +994,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    const newInterview: Interview = {
-      id: `intv-${Date.now()}`,
-      application_id: data.applicationId,
-      student_id: student.id,
-      student_name: student.name,
-      student_email: student.email,
-      internship_id: internship.id,
-      internship_title: internship.title,
-      company_name: internship.company_name,
-      date: data.date,
-      time: data.time,
-      interviewer: data.interviewer,
-      status: 'scheduled',
-      result: 'pending',
-      comments: data.comments,
-      faculty_id: currentFaculty?.id || 'fac-1',
-      created_at: new Date().toISOString(),
-    };
+    const facultyDbId = toDbId(currentFaculty?.user_id);
+    const applicationDbId = toDbId(data.applicationId);
+    if (!facultyDbId || !applicationDbId) {
+      return { success: false, error: 'Please log in with a registered faculty account to schedule interviews.' };
+    }
 
-    setInterviews(prev => [newInterview, ...prev]);
+    // Send to backend; the lists refresh when it finishes
+    api('/interviews', {
+      method: 'POST',
+      body: JSON.stringify({
+        application_id: applicationDbId,
+        scheduled_by: facultyDbId,
+        date: data.date,
+        time: data.time,
+        interviewer: data.interviewer,
+        comments: data.comments,
+      }),
+    })
+      .then(() => {
+        // The application moves to shortlisted once its interview is booked
+        updateApplicationStatus(data.applicationId, 'shortlisted', `Interview scheduled for ${data.date} at ${data.time}`);
+        logActivity(`Interview scheduled for ${student.name} with ${internship.company_name}`, 'interview', currentFaculty?.name || 'Faculty');
+        showToast('Interview scheduled.', 'success');
+        return refreshInterviews();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
 
-    // Also update application status to shortlisted if currently pending
-    updateApplicationStatus(data.applicationId, 'shortlisted', `Interview scheduled for ${data.date} at ${data.time}`);
-    logActivity(`Interview scheduled for ${student.name} with ${internship.company_name}`, 'interview', currentFaculty?.name || 'Faculty');
     return { success: true };
   };
 
@@ -724,20 +1039,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Rescheduling requires at least 24 hours advance notice.' };
     }
 
-    setInterviews(prev =>
-      prev.map(i => (i.id === id ? { ...i, date: newDate, time: newTime, status: 'rescheduled' } : i))
-    );
+    api(`/interviews/${id}`, { method: 'PATCH', body: JSON.stringify({ date: newDate, time: newTime }) })
+      .then(() => {
+        showToast('Interview rescheduled.', 'success');
+        return refreshInterviews();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
+
     return { success: true };
   };
 
   const cancelInterview = (id: string) => {
     setInterviews(prev => prev.map(i => (i.id === id ? { ...i, status: 'cancelled' } : i)));
+    api(`/interviews/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshInterviews();
+      });
   };
 
   const updateInterviewResult = (id: string, result: 'selected' | 'rejected' | 'on_hold', feedback?: string) => {
     setInterviews(prev =>
       prev.map(i => (i.id === id ? { ...i, result, feedback, status: 'completed' } : i))
     );
+    api(`/interviews/${id}`, { method: 'PATCH', body: JSON.stringify({ result, feedback }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshInterviews();
+      });
 
     const intv = interviews.find(i => i.id === id);
     if (intv && intv.application_id) {
@@ -749,70 +1078,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const submitEvaluation = (
+  const submitEvaluation = async (
     data: Omit<Evaluation, 'id' | 'created_at' | 'faculty_id' | 'faculty_name' | 'average_score'>
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     if (!currentFaculty) return { success: false, error: 'Faculty login required' };
 
-    const avg =
-      (data.technical_skills +
-        data.soft_skills +
-        data.punctuality +
-        data.responsibility +
-        data.teamwork +
-        data.learning_ability) /
-      6.0;
+    const facultyDbId = toDbId(currentFaculty.user_id);
+    const studentDbId = toDbId(data.student_id);
+    const internshipDbId = toDbId(data.internship_id);
+    if (!facultyDbId || !studentDbId || !internshipDbId) {
+      return { success: false, error: 'Please log in with a registered faculty account and pick a registered student.' };
+    }
 
-    const newEval: Evaluation = {
-      ...data,
-      id: `eval-${Date.now()}`,
-      faculty_id: currentFaculty.id,
-      faculty_name: currentFaculty.name,
-      average_score: parseFloat(avg.toFixed(1)),
-      created_at: new Date().toISOString(),
-    };
-
-    setEvaluations(prev => [newEval, ...prev]);
-    logActivity(`Evaluation submitted for ${data.student_name}`, 'evaluation', currentFaculty.name);
-    return { success: true };
+    try {
+      await api('/evaluations', {
+        method: 'POST',
+        body: JSON.stringify({
+          student_id: studentDbId,
+          internship_id: internshipDbId,
+          faculty_id: facultyDbId,
+          technical_skills: data.technical_skills,
+          soft_skills: data.soft_skills,
+          punctuality: data.punctuality,
+          responsibility: data.responsibility,
+          teamwork: data.teamwork,
+          learning_ability: data.learning_ability,
+          comments: data.comments,
+          hire_likelihood: data.hire_likelihood,
+        }),
+      });
+      logActivity(`Evaluation submitted for ${data.student_name}`, 'evaluation', currentFaculty.name);
+      refreshFeedback();
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
   };
 
   // Admin Actions
-  const addStudent = (data: Omit<Student, 'id' | 'user_id' | 'status'>): { success: boolean; error?: string } => {
-    if (students.some(s => s.email.toLowerCase() === data.email.toLowerCase())) {
-      return { success: false, error: 'A student with this email address already exists.' };
-    }
-    if (data.gpa < 0 || data.gpa > 10.0) {
-      return { success: false, error: 'GPA must be between 0.00 and 10.00.' };
-    }
-    const cleanPhone = data.phone.replace(/[^0-9]/g, '');
-    if (cleanPhone.length < 10 || cleanPhone.length > 15) {
-      return { success: false, error: 'Phone number must be between 10 and 15 digits.' };
-    }
-
-    const newId = `std-${Date.now()}`;
-    const newUserId = `user-${newId}`;
-    const newStudent: Student = {
-      ...data,
-      id: newId,
-      user_id: newUserId,
-      status: 'active',
-      placed: false,
-    };
-
-    const newUser: User = {
-      id: newUserId,
-      email: data.email,
-      name: data.name,
-      role: 'student',
-      status: 'active',
-      created_at: new Date().toISOString(),
-    };
-
-    setStudents(prev => [newStudent, ...prev]);
-    setUsers(prev => [newUser, ...prev]);
-    logActivity(`New student registered: ${data.name} (${data.department})`, 'student', 'Admin');
-    return { success: true };
+  const addStudent = (_data: Omit<Student, 'id' | 'user_id' | 'status'>): { success: boolean; error?: string } => {
+    return { success: false, error: 'Students create their own account from the Create New Account page, so they can set their own password.' };
   };
 
   const editStudent = (id: string, updates: Partial<Student>): { success: boolean; error?: string } => {
@@ -830,33 +1135,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deactivateStudent = (id: string) => {
-    setStudents(prev => prev.map(s => (s.id === id ? { ...s, status: s.status === 'active' ? 'deactivated' : 'active' } : s)));
+    const target = students.find(s => s.id === id);
+    if (!target) return;
+    const next = target.status === 'active' ? 'deactivated' : 'active';
+    setStudents(prev => prev.map(s => (s.id === id ? { ...s, status: next } : s)));
+    api(`/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: next }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshPeople();
+      });
   };
 
-  const addFaculty = (data: Omit<Faculty, 'id' | 'user_id' | 'status'>): { success: boolean; error?: string } => {
-    if (faculty.some(f => f.email.toLowerCase() === data.email.toLowerCase())) {
-      return { success: false, error: 'Faculty with this email already exists.' };
-    }
-    const newId = `fac-${Date.now()}`;
-    const newUserId = `user-${newId}`;
-    const newFac: Faculty = {
-      ...data,
-      id: newId,
-      user_id: newUserId,
-      status: 'active',
-    };
-    const newUser: User = {
-      id: newUserId,
-      email: data.email,
-      name: data.name,
-      role: 'faculty',
-      status: 'active',
-      created_at: new Date().toISOString(),
-    };
-    setFaculty(prev => [newFac, ...prev]);
-    setUsers(prev => [newUser, ...prev]);
-    logActivity(`New faculty member added: ${data.name}`, 'student', 'Admin');
-    return { success: true };
+  const addFaculty = (_data: Omit<Faculty, 'id' | 'user_id' | 'status'>): { success: boolean; error?: string } => {
+    return { success: false, error: 'Faculty create their own account from the Create New Account page, so they can set their own password.' };
   };
 
   const editFaculty = (id: string, updates: Partial<Faculty>): { success: boolean; error?: string } => {
@@ -865,7 +1156,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deactivateFaculty = (id: string) => {
-    setFaculty(prev => prev.map(f => (f.id === id ? { ...f, status: f.status === 'active' ? 'deactivated' : 'active' } : f)));
+    const target = faculty.find(f => f.id === id);
+    if (!target) return;
+    const next = target.status === 'active' ? 'deactivated' : 'active';
+    setFaculty(prev => prev.map(f => (f.id === id ? { ...f, status: next } : f)));
+    api(`/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: next }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshPeople();
+      });
   };
 
   const addCompany = (data: Omit<Company, 'id' | 'created_at' | 'status'>): { success: boolean; error?: string } => {
@@ -874,15 +1173,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: `Company Registration Number '${data.reg_number}' already exists in database.` };
     }
 
-    const newComp: Company = {
-      ...data,
-      id: `comp-${Date.now()}`,
-      status: 'active',
-      created_at: new Date().toISOString(),
-    };
+    // Save to backend; the list refreshes when it finishes
+    api('/companies', { method: 'POST', body: JSON.stringify(data) })
+      .then(() => {
+        logActivity(`Company registered: ${data.name} (Reg: ${data.reg_number})`, 'student', 'Admin');
+        showToast('Company saved.', 'success');
+        return refreshCatalog();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
 
-    setCompanies(prev => [newComp, ...prev]);
-    logActivity(`Company registered: ${data.name} (Reg: ${data.reg_number})`, 'student', 'Admin');
     return { success: true };
   };
 
@@ -893,16 +1192,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'Registration number must be unique across all companies.' };
       }
     }
+    // No edit endpoint on the backend yet: this change lasts only until refresh
     setCompanies(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c)));
     return { success: true };
   };
 
   const archiveCompany = (id: string) => {
-    setCompanies(prev => prev.map(c => (c.id === id ? { ...c, status: c.status === 'active' ? 'archived' : 'active' } : c)));
+    const target = companies.find(c => c.id === id);
+    if (!target) return;
+    const next = target.status === 'active' ? 'archived' : 'active';
+    setCompanies(prev => prev.map(c => (c.id === id ? { ...c, status: next } : c)));
+    api(`/companies/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: next }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshCatalog();
+      });
   };
 
   const setInternshipStatus = (id: string, status: InternshipStatus) => {
     setInternships(prev => prev.map(i => (i.id === id ? { ...i, status } : i)));
+    api(`/internships/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) })
+      .catch((e: Error) => {
+        showToast(e.message, 'error');
+        refreshCatalog();
+      });
   };
 
   const submitSystemFeedback = (
@@ -913,18 +1226,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Please enter a description for your feedback.' };
     }
 
-    const newFb: SystemFeedback = {
-      id: `sys-${Date.now()}`,
-      user_id: currentUser?.id || 'anonymous',
-      user_name: currentUser?.name || 'Guest User',
-      user_role: currentUser?.role || 'student',
-      feedback_type: type,
-      description,
-      status: 'received',
-      submitted_at: new Date().toISOString(),
-    };
+    api('/system-feedback', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: currentUser ? toDbId(currentUser.id) : null,
+        feedback_type: type,
+        description: description.trim(),
+      }),
+    })
+      .then(() => {
+        showToast('Feedback received. Thank you.', 'success');
+        return refreshFeedback();
+      })
+      .catch((e: Error) => showToast(e.message, 'error'));
 
-    setSystemFeedbacks(prev => [newFb, ...prev]);
     return { success: true };
   };
 
@@ -932,16 +1247,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.clear();
     setUsers(INITIAL_USERS);
     setCurrentUser(INITIAL_USERS[0]);
-    setStudents(INITIAL_STUDENTS);
-    setFaculty(INITIAL_FACULTY);
-    setCompanies(INITIAL_COMPANIES);
-    setInternships(INITIAL_INTERNSHIPS);
-    setApplications(INITIAL_APPLICATIONS);
-    setInterviews(INITIAL_INTERVIEWS);
-    setEvaluations(INITIAL_EVALUATIONS);
-    setStudentFeedbacks(INITIAL_STUDENT_FEEDBACK);
-    setSystemFeedbacks(INITIAL_SYSTEM_FEEDBACK);
+    setStudents([]);
+    setFaculty([]);
+    setApplications([]);
+    setInterviews([]);
+    setEvaluations([]);
+    setStudentFeedbacks([]);
+    setSystemFeedbacks([]);
     setRecentActivities(INITIAL_RECENT_ACTIVITIES);
+    refreshCatalog();
   };
 
   return (
@@ -962,6 +1276,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         systemFeedbacks,
         recentActivities,
         login,
+        loginWithUser,
         logout,
         switchRole,
         registerStudentAccount,

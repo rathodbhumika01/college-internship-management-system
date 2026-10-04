@@ -8,8 +8,7 @@ export const StudentFeedback: React.FC = () => {
 
   // Find internships student has applied for or accepted
   const eligibleApps = applications.filter(
-    a => a.student_id === currentStudent?.id && (a.status === 'accepted' || a.status === 'shortlisted')
-  );
+a => a.student_id === currentStudent?.id && a.status === 'accepted'  );
 
   const eligibleInternships = internships.filter(i =>
     eligibleApps.some(a => a.internship_id === i.id)
@@ -33,8 +32,7 @@ export const StudentFeedback: React.FC = () => {
   // Student's previous feedbacks
   const myFeedbacks = studentFeedbacks.filter(f => f.student_id === currentStudent?.id);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+const handleSubmit = async (e: React.FormEvent) => {    e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -51,7 +49,8 @@ export const StudentFeedback: React.FC = () => {
     const selectedInternship = internships.find(i => i.id === selectedInternshipId);
     if (!selectedInternship) return;
 
-    const res = submitStudentFeedback(selectedInternshipId, {
+const res = await submitStudentFeedback(
+      selectedInternshipId, {
       company_id: selectedInternship.company_id,
       company_culture: companyCulture,
       mentorship_quality: mentorshipQuality,

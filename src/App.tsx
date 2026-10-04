@@ -13,7 +13,7 @@ import { StudentFeedback } from './components/student/StudentFeedback';
 import { StudentProfile } from './components/student/StudentProfile';
 
 // Faculty Components
-import { FacultyDashboard } from './components/faculty/FacultyDashboard';
+import { FacultyInternships } from './components/faculty/FacultyInternships';
 import { FacultyApplications } from './components/faculty/FacultyApplications';
 import { FacultyInterviews } from './components/faculty/FacultyInterviews';
 import { FacultyEvaluations } from './components/faculty/FacultyEvaluations';
@@ -32,7 +32,7 @@ import { AdminSystemFeedback } from './components/admin/AdminSystemFeedback';
 
 import { Menu, X } from 'lucide-react';
 import { ToastNotification } from './components/common/ToastNotification';
-
+import { FacultyDashboard } from './components/faculty/FacultyDashboard';
 const MainPortal: React.FC = () => {
   const { currentUser } = useApp();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
@@ -72,8 +72,9 @@ const MainPortal: React.FC = () => {
     if (role === 'faculty') {
       switch (currentTab) {
         case 'dashboard':
-        case 'my-internships':
           return <FacultyDashboard />;
+        case 'my-internships':
+          return <FacultyInternships />;
         case 'applications':
           return <FacultyApplications />;
         case 'interviews':

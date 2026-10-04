@@ -13,8 +13,7 @@ import {
 import { Modal } from '../common/Modal';
 
 export const LoginPage: React.FC = () => {
-  const { login, registerStudentAccount, registerFacultyAccount } = useApp();
-
+const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp();
   // Active role selected in tab: 'student' | 'faculty' | 'admin'
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
 
@@ -134,8 +133,7 @@ export const LoginPage: React.FC = () => {
 
     const response = await authService.login(
       { email, password, role: selectedRole },
-      (em, r) => login(em, r)
-    );
+(user) => loginWithUser(user)    );
 
     setIsLoggingIn(false);
 

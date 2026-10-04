@@ -25,7 +25,7 @@ export const FacultyEvaluations: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -42,7 +42,8 @@ export const FacultyEvaluations: React.FC = () => {
       return;
     }
 
-    const res = submitEvaluation({
+const res = await submitEvaluation(
+      {
       student_id: student.id,
       student_name: student.name,
       internship_id: internship.id,
