@@ -9,11 +9,12 @@ import {
   EyeOff,
   AlertCircle,
   CheckCircle2,
+  Info,
 } from 'lucide-react';
 import { Modal } from '../common/Modal';
 
 export const LoginPage: React.FC = () => {
-const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp();
+  const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp();
   // Active role selected in tab: 'student' | 'faculty' | 'admin'
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
 
@@ -27,8 +28,8 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
   // -------------------------------------------------------------
   // LOGIN FORM STATE
   // -------------------------------------------------------------
-  const [email, setEmail] = useState('bhumika.rathod@college.edu');
-  const [password, setPassword] = useState('College@2026');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -65,12 +66,9 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
 
   // -------------------------------------------------------------
   // FORGOT PASSWORD MODAL STATE
+  // (password reset by email is not built yet, so the modal only explains that)
   // -------------------------------------------------------------
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotSuccess, setForgotSuccess] = useState(false);
-  const [forgotError, setForgotError] = useState<string | null>(null);
-  const [isSubmittingForgot, setIsSubmittingForgot] = useState(false);
 
   // -------------------------------------------------------------
   // VALIDATION HELPERS
@@ -96,18 +94,9 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
     setLoginError(null);
     setSuccessBanner(null);
 
-    // If user selects Admin while in registration mode, Admin has NO registration,
-    // so switch immediately to login mode.
+    // Admin has NO registration, so switch immediately to login mode.
     if (role === 'admin') {
       setIsRegisterMode(false);
-      setEmail('admin.placement@college.edu');
-      setPassword('Admin@2026');
-    } else if (role === 'student' && !isRegisterMode) {
-      setEmail('bhumika.rathod@college.edu');
-      setPassword('College@2026');
-    } else if (role === 'faculty' && !isRegisterMode) {
-      setEmail('priya.nair@college.edu');
-      setPassword('Faculty@2026');
     }
   };
 
@@ -133,7 +122,8 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
 
     const response = await authService.login(
       { email, password, role: selectedRole },
-(user) => loginWithUser(user)    );
+      (user) => loginWithUser(user)
+    );
 
     setIsLoggingIn(false);
 
@@ -310,45 +300,6 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
     }
   };
 
-  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setForgotError(null);
-
-    if (!isEmailValid(forgotEmail)) {
-      setForgotError('Please enter a valid institutional email.');
-      return;
-    }
-
-    setIsSubmittingForgot(true);
-    await authService.forgotPassword(forgotEmail);
-    setIsSubmittingForgot(false);
-    setForgotSuccess(true);
-
-    setTimeout(() => {
-      setForgotSuccess(false);
-      setShowForgotPasswordModal(false);
-      setForgotEmail('');
-    }, 2800);
-  };
-
-  const fillQuickPreset = (role: UserRole) => {
-    setLoginError(null);
-    setSuccessBanner(null);
-    setSelectedRole(role);
-    setIsRegisterMode(false);
-
-    if (role === 'student') {
-      setEmail('bhumika.rathod@college.edu');
-      setPassword('College@2026');
-    } else if (role === 'faculty') {
-      setEmail('priya.nair@college.edu');
-      setPassword('Faculty@2026');
-    } else {
-      setEmail('admin.placement@college.edu');
-      setPassword('Admin@2026');
-    }
-  };
-
   const getLoginButtonText = () => {
     if (isLoggingIn) return 'Logging in...';
     switch (selectedRole) {
@@ -453,10 +404,7 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
                   </label>
                   <button
                     type="button"
-                    onClick={() => {
-                      setForgotEmail(email);
-                      setShowForgotPasswordModal(true);
-                    }}
+                    onClick={() => setShowForgotPasswordModal(true)}
                     className="text-xs text-slate-600 hover:text-slate-900 hover:underline"
                   >
                     Forgot Password?
@@ -927,121 +875,32 @@ const { loginWithUser, registerStudentAccount, registerFacultyAccount } = useApp
               </form>
             </div>
           )}
-
-          {/* ======================================================= */}
-          {/* PRESENTATION DEMO ACCOUNTS                              */}
-          {/* ======================================================= */}
-          <div className="mt-6 pt-5 border-t border-slate-200">
-            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block text-center mb-2">
-              Presentation Demo Accounts
-            </span>
-            <div className="space-y-1.5 text-xs">
-              <button
-                type="button"
-                onClick={() => fillQuickPreset('student')}
-                className={`w-full text-left px-2.5 py-1.5 rounded border transition-colors flex justify-between items-center ${
-                  selectedRole === 'student' && !isRegisterMode && email === 'bhumika.rathod@college.edu'
-                    ? 'bg-slate-100 border-slate-300 font-medium'
-                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200'
-                }`}
-              >
-                <span className="text-slate-800">
-                  <strong className="font-semibold">Student:</strong> Bhumika Rathod
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono">bhumika.rathod@college.edu</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => fillQuickPreset('faculty')}
-                className={`w-full text-left px-2.5 py-1.5 rounded border transition-colors flex justify-between items-center ${
-                  selectedRole === 'faculty' && !isRegisterMode && email === 'priya.nair@college.edu'
-                    ? 'bg-slate-100 border-slate-300 font-medium'
-                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200'
-                }`}
-              >
-                <span className="text-slate-800">
-                  <strong className="font-semibold">Faculty:</strong> Dr. Priya Nair
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono">priya.nair@college.edu</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => fillQuickPreset('admin')}
-                className={`w-full text-left px-2.5 py-1.5 rounded border transition-colors flex justify-between items-center ${
-                  selectedRole === 'admin'
-                    ? 'bg-slate-100 border-slate-300 font-medium'
-                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200'
-                }`}
-              >
-                <span className="text-slate-800">
-                  <strong className="font-semibold">Admin:</strong> Placement Officer
-                </span>
-                <span className="text-[11px] text-slate-500 font-mono">admin.placement@college.edu</span>
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
       {/* Forgot Password Modal */}
       <Modal
         isOpen={showForgotPasswordModal}
-        onClose={() => {
-          setShowForgotPasswordModal(false);
-          setForgotError(null);
-          setForgotSuccess(false);
-        }}
-        title="Reset Account Password"
-        subtitle="Verification link sent to institutional college email"
+        onClose={() => setShowForgotPasswordModal(false)}
+        title="Forgot your password?"
+        subtitle="Password reset"
         maxWidth="sm"
       >
-        {forgotSuccess ? (
-          <div className="text-center py-4 space-y-2">
-            <CheckCircle2 size={28} className="text-emerald-600 mx-auto" />
-            <h4 className="text-sm font-semibold text-slate-900">Reset instructions dispatched</h4>
-            <p className="text-xs text-slate-500">
-              Verification link and password recovery steps have been sent to your institutional email.
-            </p>
-          </div>
-        ) : (
-          <form onSubmit={handleForgotPasswordSubmit} className="space-y-4 text-xs">
-            {forgotError && (
-              <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded text-xs flex items-center gap-1.5">
-                <AlertCircle size={15} />
-                <span>{forgotError}</span>
-              </div>
-            )}
-            <div>
-              <label className="block font-semibold text-slate-800 mb-1">
-                Enter Registered Institutional Email *
-              </label>
-              <input
-                type="email"
-                value={forgotEmail}
-                onChange={(e) => setForgotEmail(e.target.value)}
-                required
-                placeholder="your.email@college.edu"
-                className="w-full px-3 py-2 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-slate-900 focus:outline-none"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowForgotPasswordModal(false)}
-                className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmittingForgot}
-                className="px-3 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:bg-slate-700 rounded"
-              >
-                {isSubmittingForgot ? 'Sending...' : 'Send Reset Link'}
-              </button>
-            </div>
-          </form>
-        )}
+        <div className="text-center py-4 space-y-3">
+          <Info size={28} className="text-emerald-700 mx-auto" />
+          <h4 className="text-sm font-semibold text-slate-900">Reset by email is coming soon</h4>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Automatic password reset emails are not available yet. For now, please contact the
+            placement office or your administrator to reset your password.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowForgotPasswordModal(false)}
+            className="px-4 py-1.5 text-xs font-medium text-white bg-emerald-800 hover:bg-emerald-900 rounded"
+          >
+            Got it
+          </button>
+        </div>
       </Modal>
     </div>
   );
